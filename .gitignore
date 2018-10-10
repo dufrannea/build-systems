@@ -1,3 +1,5 @@
 *.class
 *.log
 target
+.dotty-ide-artifact
+.dotty-ide.json
