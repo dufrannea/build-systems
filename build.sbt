@@ -1,12 +1,11 @@
-val dottyVersion = "0.9.0"
-val scala212Version = "2.12.6"
-val scala212Minor = "2.12"
+val dottyVersion = "0.17.0-RC1"
+val scala212Version = "2.12.7"
 val catsVersion = "1.0.0"
 
 lazy val root = project
   .in(file("."))
   .settings(
-    name := "dotty-cross",
+    name := "build-systems",
     version := "0.1.0",
 
     libraryDependencies += ("org.typelevel" %% "cats-core" % catsVersion).withDottyCompat(scalaVersion.value),
