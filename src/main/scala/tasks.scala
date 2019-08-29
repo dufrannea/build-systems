@@ -3,6 +3,7 @@ package tasks
 import cats._
 import cats.implicits._
 import cats.data.State
+import cats.mtl.MonadState
 
 // contract for a store
 trait Store[I, K, V] {
@@ -97,10 +98,9 @@ def topological[K, V, I] = new Build[Applicative, K, V, I] {
   }
 }
 
-import cats.mtl.MonadState
-
 type Rebuilder[C[_[_]], IR, K, V] = (k: K, v: V, t: Task[C, K, V]) =>
    Task[[M[_]] =>> MonadState[M, IR], K, V]
 
 type Scheduler[C[_[_]], I, IR, K, V] =
   (r: Rebuilder[C, IR, K, V]) => Build[C, I, K, V]
+
