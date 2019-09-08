@@ -24,12 +24,14 @@ def modTimeRebuilder[K, V]: Rebuilder[Applicative, MakeInfo[K], K, V] =
         (now, map) = get
         dirty = map.get(k) match {
           case None => true
-          case Some(time) => deps(t).exists(depKey => map.get(depKey).exists(t => t > time))
+          case Some(time) => dependencies(t)
+            .exists(depKey => map.get(depKey).exists(t => t > time))
         }
         res <- if (dirty) {
-          F.set((now + 1, map + (k -> now))).flatMap { case _ =>
-            t.run(fetch)
-          }
+          for {
+            _ <- F.set((now + 1, map + (k -> now)))
+            r <- t.run(fetch)
+          } yield r
         } else {
           F.monad.pure(v)
         }

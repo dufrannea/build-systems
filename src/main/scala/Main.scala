@@ -1,4 +1,4 @@
-package main
+package example
 
 import cats._
 import cats.implicits._
@@ -69,18 +69,51 @@ object Example {
   }
 }
 
-def main(args: Array[String]): Unit = {
+@main
+def runAll = {
   
   import cats.effect._
+  val store: Store[Unit, String, Integer] = SimpleStore((), {
+      case "A1" => 10
+      case "A2" => 20
+      case r => 42
+    })
 
-  val store: Store[Unit, String, Integer] = SimpleStore((),  (k => if (k == "A1") 10 else 20))
-  val result = tasks.topological.build(Example.workflow2, "B2", store)
+  println("**** BUSY *****")
+  val resultBusy = busy.build(Example.workflow2, "B2", store)
+  println(s"B1 ${resultBusy.getValue("B1")}")
+  println(s"B2 ${resultBusy.getValue("B2")}")
+
+  println("**** TOPO / dummyRebuilder *****")
+  val result = tasks.topological.toBuild(tasks.dummyRebuilder).build(Example.workflow2, "B2", store)
   println(s"B1 ${result.getValue("B1")}")
   println(s"B2 ${result.getValue("B2")}")
-  println(deps(Example.workflow2.get("B2").get))
+  println(dependencies(Example.workflow2.get("B2").get))
   println(transitiveDeps("B2", Example.workflow2))
 
-  val s = track(Example.sprsh2.get("B1").get, k => IO { println(k); scala.io.StdIn.readInt })
-
+  // tracking dynamic dependencies
+  val s = track(Example.sprsh2.get("B1").get, k => IO { 
+    // could be a read from command line
+    1 
+  })
   println("result" + s.unsafeRunSync._1)
+
+  // make: topological scheduler + modTimeRebuilder
+  println("**** Make : TOPO / modTimeRebuilder *****")
+  import make._
+  val makeBuild = topological[String, Integer, (Time, Map[String, Time])].toBuild(modTimeRebuilder)
+
+  val makeStore: Store[(Time, Map[String, Time]), String, Integer] = 
+    SimpleStore((1, Map.empty), {
+      case "A1" => 10
+      case "A2" => 20
+      case r => 42
+    })
+
+  val makeResult = makeBuild.build(Example.workflow2, "B2", makeStore)
+  
+  println(makeResult.getInfo._2)
+  println(s"B1 ${makeResult.getValue("B1")}")
+  println(s"B2 ${makeResult.getValue("B2")}")
+
 }

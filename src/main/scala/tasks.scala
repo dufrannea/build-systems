@@ -4,6 +4,7 @@ import cats._
 import cats.implicits._
 import cats.data.State
 import cats.mtl.MonadState
+import cats.mtl.implicits._
 
 // contract for a store
 trait Store[I, K, V] {
@@ -22,7 +23,7 @@ case class SimpleStore[I, K, V](i: I, values: K => V) extends Store[I, K, V] {
 }
 
 trait Task[C[_[_]], K, V] {
-  def run[F[_]](fetch: K => F[V])(implicit ev: C[F]): F[V]
+  def run[F[_]: C](fetch: (K => F[V])): F[V]
 }
 
 trait Tasks[C[_[_]], K, V] {
@@ -53,7 +54,7 @@ def busy[K, V, I] = new Build[Applicative, K, V, I]() {
   }
 }
 
-def deps[K, V](task: Task[Applicative, K, V]): List[K] = {
+def dependencies[K, V](task: Task[Applicative, K, V]): List[K] = {
   import cats.data.Const
 
   task.run(k => Const[List[K], V](List(k))).getConst
@@ -70,37 +71,69 @@ def track[M[_] : Monad, K, V](t: Task[Monad, K, V], fetch: K => M[V]): M[(List[(
 }
 
 /*
-  * Get all transitive deps in topological order
+  * Get all transitive *task* dependencies in topological order
   */
 def transitiveDeps[Ka, Va](key: Ka, tasks: Tasks[Applicative, Ka, Va]): List[Ka] =
     tasks.get(key) match {
-      case None => List(key)
-      case Some(task) => (deps[Ka, Va](task).flatMap(transitiveDeps(_, tasks)) ++ List(key)).distinct
+      case None => List()
+      case Some(task) => (dependencies[Ka, Va](task).flatMap(transitiveDeps(_, tasks)) ++ List(key)).distinct
     }
 
-def topological[K, V, I] = new Build[Applicative, K, V, I] {
-  import scala.language.implicitConversions
-
-  def build(tasks: Tasks[Applicative, K, V], key: K, store: Store[I, K, V]): Store[I, K, V] = {
-    tasks.get(key) match {
-      case None => store
-      case Some(t) =>
-        val depsStore = transitiveDeps[K, V](key, tasks).flatMap({ a =>
-          tasks.get(a).toList.map(_ -> a)
-        }).foldLeft(store)({ case (cs, (currentTask, currentKey)) =>
-          val v = currentTask.run[Id](k => cs.getValue(k))
-          println(s"ran ${currentKey} got ${v}")
-          cs.putValue(currentKey, v)
-        })
-
-        store.putValue(key, t.run[Id](k => depsStore.getValue(k)))
-    }
-  }
+trait Rebuilder[C[_[_]], IR, K, V] {
+  def wrap(k: K, v: V, t: Task[C, K, V]): Task[[M[_]] =>> MonadState[M, IR], K, V] 
 }
 
-type Rebuilder[C[_[_]], IR, K, V] = (k: K, v: V, t: Task[C, K, V]) =>
-   Task[[M[_]] =>> MonadState[M, IR], K, V]
+trait Scheduler[C[_[_]], I, IR, K, V] {
+  def toBuild(r: Rebuilder[C, IR, K, V]): Build[C, K, V, I]
+}
 
-type Scheduler[C[_[_]], I, IR, K, V] =
-  (r: Rebuilder[C, IR, K, V]) => Build[C, I, K, V]
+// partially applied monadstate to avoid
+// writing type lambdas
+opaque type MonadStateK[K] = [M[_]] =>> MonadState[M, K]
 
+def dummyRebuilder[K, V] = new Rebuilder[Applicative, Unit, K, V] {
+  def wrap(k: K, v: V, t: Task[Applicative, K, V]): Task[MonadStateK[Unit], K, V] = {
+    new Task[MonadStateK[Unit], K, V] {
+      def run[F[_] : MonadStateK[Unit]](fetch: (K => F[V])): F[V] = {
+        val tartine: MonadState[F, Unit] = implicitly[MonadState[F, Unit]]
+        t.run[F](fetch)(tartine.monad)
+      }
+    }  
+  }
+}
+def topological[K, V, I]: Scheduler[Applicative, I, I, K, V] = new Scheduler {
+
+  def liftStore[A](x: State[I, A]): State[Store[I, K, V], A] =
+    State[Store[I, K, V], A](store => {
+      val (i, a) = x.run(store.getInfo).value
+      store.putInfo(i) -> a
+    })
+    
+  def toBuild(r: Rebuilder[Applicative, I, K, V]) =
+    new Build[Applicative, K, V, I] {
+      import scala.language.implicitConversions
+
+      def build(
+        tasks: Tasks[Applicative, K, V],
+        key: K,
+        store: Store[I, K, V]): Store[I, K, V] = {
+
+        val order = transitiveDeps[K, V](key, tasks)
+
+        def build0(k: K): State[Store[I, K, V], Unit] = tasks.get(k) match {
+          case None => State(s => (s, ()))
+          case Some(t) =>
+            for {
+              store <- getState[Store[I, K, V]]
+              value = store.getValue(k)
+              newTask = r.wrap(k, value, t)
+              fetch: (K => State[I, V]) = k => State(s => (s, store.getValue(k)))
+              newValue <- liftStore(newTask.run(fetch))
+              _ <- cats.data.State.modify[Store[I, K, V]](_.putValue(k, newValue))
+            } yield ()
+        }
+
+        order.traverse_(build0).runS(store).value
+      }
+    }
+}
