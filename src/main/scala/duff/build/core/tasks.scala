@@ -1,5 +1,7 @@
 package tasks
 
+import scala.language.implicitConversions
+
 import cats._
 import cats.data.State
 import cats.implicits._
@@ -16,17 +18,17 @@ trait Store[I, K, V] {
 
 // simplistic implementation of a store, by function composition
 case class SimpleStore[I, K, V](i: I, values: K => V) extends Store[I, K, V] {
-  override def getInfo = i
-  override def putInfo(ni: I) = copy(i = ni)
+  override def getInfo: I = i
+  override def putInfo(ni: I): Store[I, K, V] = copy(i = ni)
 
-  override def putValue(k: K, v: V) = SimpleStore(
+  override def putValue(k: K, v: V): Store[I, K, V] = SimpleStore(
     i,
     key =>
       if (k == key) { v }
       else values(key)
   )
 
-  override def getValue(k: K) = values(k)
+  override def getValue(k: K): V = values(k)
 }
 
 /** Given type constraint C, and functor F that follows this type constraint, provides the ability to retrieve a key
@@ -104,7 +106,7 @@ def transitiveDeps[Ka, Va](key: Ka, tasks: Tasks[Applicative, Ka, Va]): List[Ka]
   }
 
 trait Rebuilder[C[_[_]], IR, K, V] {
-  def wrap(k: K, v: V, t: Task[C, K, V]): Task[[M[_]] =>> Stateful[M, IR], K, V]
+  def rebuild(k: K, v: V, t: Task[C, K, V]): Task[[M[_]] =>> Stateful[M, IR], K, V]
 }
 
 trait Scheduler[C[_[_]], I, IR, K, V] {
@@ -113,16 +115,16 @@ trait Scheduler[C[_[_]], I, IR, K, V] {
 
 // partially applied monadstate to avoid
 // writing type lambdas
-type MonadStateK[K] = [M[_]] =>> Stateful[M, K]
+type MonadState[K] = [M[_]] =>> Stateful[M, K]
 
-def dummyRebuilder[K, V] = new Rebuilder[Applicative, Unit, K, V] {
+def dummyRebuilder[K, V, IR] = new Rebuilder[Applicative, IR, K, V] {
 
-  def wrap(k: K, v: V, t: Task[Applicative, K, V]): Task[MonadStateK[Unit], K, V] =
-    new Task[MonadStateK[Unit], K, V] {
+  def rebuild(k: K, v: V, t: Task[Applicative, K, V]): Task[MonadState[IR], K, V] =
+    new Task[MonadState[IR], K, V] {
 
-      def run[F[_]: MonadStateK[Unit]](fetch: (K => F[V])): F[V] = {
-        val tartine: Stateful[F, Unit] = implicitly[Stateful[F, Unit]]
-        t.run[F](fetch)(tartine.monad)
+      def run[F[_]: MonadState[IR]](fetch: (K => F[V])): F[V] = {
+        given Monad[F] = summon[MonadState[IR][F]].monad
+        t.run[F](fetch)
       }
 
     }
@@ -137,9 +139,8 @@ def topological[K, V, I]: Scheduler[Applicative, I, I, K, V] = new Scheduler {
       store.putInfo(i) -> a
     }
 
-  def toBuild(r: Rebuilder[Applicative, I, K, V]) =
+  def toBuild(r: Rebuilder[Applicative, I, K, V]): Build[Applicative, K, V, I] =
     new Build[Applicative, K, V, I] {
-      import scala.language.implicitConversions
 
       def build(
         tasks: Tasks[Applicative, K, V],
@@ -155,7 +156,7 @@ def topological[K, V, I]: Scheduler[Applicative, I, I, K, V] = new Scheduler {
             for {
               store    <- getState[Store[I, K, V]]
               value = store.getValue(k)
-              newTask = r.wrap(k, value, t)
+              newTask = r.rebuild(k, value, t)
               fetch: (K => State[I, V]) = k => State(s => (s, store.getValue(k)))
               newValue <- liftStore(newTask.run(fetch))
               _        <- cats.data.State.modify[Store[I, K, V]](_.putValue(k, newValue))

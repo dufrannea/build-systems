@@ -1,23 +1,18 @@
-package make
+package duff.build.make 
 
 import scala.language.implicitConversions
-
-import cats._
-import cats.data._
-import cats.implicits._
-import cats.mtl.{given, *}
-import cats.mtl.Stateful
-
-import tasks._
+import cats.*
+import cats.data.*
+import cats.implicits.*
+import cats.mtl.{*, given}
+import duff.build.core.{Rebuilder, Task}
 
 type Time = Integer
 type MakeInfo[K] = (Time, Map[K, Time])
 
-type MonadStateK[U] = [M[_]] =>> Stateful[M, U]
-
 def modTimeRebuilder[K, V]: Rebuilder[Applicative, MakeInfo[K], K, V] =
   (k: K, v: V, t: Task[Applicative, K, V]) =>
-    new Task[MonadStateK[MakeInfo[K]], K, V] {
+    new Task[[m[_]] =>> Stateful[m, MakeInfo[K]], K, V] {
 
       def run[F[_]](fetch: K => F[V])(using F: Stateful[F, MakeInfo[K]]): F[V] = {
         implicit val lol = F.monad

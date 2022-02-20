@@ -1,13 +1,11 @@
-package example
+package duff.build 
 
 import scala.language.implicitConversions
-
-import cats._
+import cats.*
 import cats.data.State
-import cats.effect._
-import cats.implicits._
-
-import tasks._
+import cats.effect.*
+import cats.implicits.*
+import duff.build.core.{SimpleStore, Store, Task, Tasks}
 
 object Example {
 
